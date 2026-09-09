@@ -1,12 +1,24 @@
-# QuickNovel
+# QuickNovel (Edge TTS fork)
+
+This is an **independent fork** of [QuickNovel](https://github.com/LagradOst/QuickNovel). It is not affiliated with, endorsed by, or maintained by the original author.
+
+**Original project:** https://github.com/LagradOst/QuickNovel
+
+The original is an ad-free FOSS Android app for downloading novels. It also functions as an EPUB reader. This fork keeps that base and adds reader TTS options.
+
+## Changes in this fork
+
+- **Microsoft Edge TTS** in the EPUB reader, using Microsoft’s Edge Speech neural voices over the network
+- Edge voices appear in the existing language/voice pickers, labeled like `Aria (Edge TTS)`, alongside Android system TTS
+- Playback stops on the first Edge connection failure instead of skipping through the chapter
+- Debug builds install **beside** official QuickNovel as **QN EdgeTTS** (`com.lagradost.quicknovel.edgetts`) so both apps can coexist
+
+**This fork:** https://github.com/Oxika95/QuickNovelDBOFork  
+**Downloads:** build from the `edge-tts` branch, or use [this repository’s releases](https://github.com/Oxika95/QuickNovelDBOFork/releases) when published. Official QuickNovel builds remain at https://github.com/LagradOst/QuickNovel/releases
 
 **English** | [Русский](README_RU.md)
 
-Adfree FOSS Android app for downloading novels. It also functions as an Epub reader.
-
-**Discord:** https://discord.gg/5Hus6fM
-
-**Download:** https://github.com/LagradOst/QuickNovel/releases
+**Original Discord:** https://discord.gg/5Hus6fM
 
 **Providers used:** 
 

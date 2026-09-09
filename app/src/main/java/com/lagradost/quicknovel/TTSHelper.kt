@@ -14,18 +14,31 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.StyleSpan
+import com.lagradost.quicknovel.BaseApplication.Companion.getKey
 import com.lagradost.quicknovel.BaseApplication.Companion.removeKey
 import com.lagradost.quicknovel.BaseApplication.Companion.setKey
 import com.lagradost.quicknovel.mvvm.debugAssert
+import com.lagradost.quicknovel.mvvm.logError
 import com.lagradost.quicknovel.receivers.BecomingNoisyReceiver
+import com.lagradost.quicknovel.tts.EdgeTtsClient
+import com.lagradost.quicknovel.tts.EdgeTtsPlayer
+import com.lagradost.quicknovel.tts.EdgeTtsVoice
+import com.lagradost.quicknovel.tts.EdgeTtsVoices
+import com.lagradost.quicknovel.tts.ReaderTtsVoice
 import com.lagradost.quicknovel.ui.UiText
 import com.lagradost.quicknovel.ui.txt
 import com.lagradost.quicknovel.util.UIHelper.requestAudioFocus
 import com.lagradost.quicknovel.util.UIHelper.unRequestAudioFocus
 import io.noties.markwon.Markwon
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.jsoup.Jsoup
@@ -64,8 +77,26 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     private var speed: Float = 1.0f
     private var pitch: Float = 1.0f
 
+    private val edgePlayer = EdgeTtsPlayer(context.applicationContext)
+    private val edgeJob = SupervisorJob()
+    private val edgeScope = CoroutineScope(edgeJob + Dispatchers.IO)
+    private var edgeSpeakJob: Job? = null
+    private var edgeSpeakGeneration = 0
+    private var edgeSpeakFailed = false
+    private var edgeVoice: EdgeTtsVoice? = restoreEdgeVoice()
+    var currentLocale: Locale = restoreLocale()
+        private set
+
+    fun usesEdgeVoice(): Boolean = edgeVoice != null
+
+    fun consumeEdgeSpeakFailure(): Boolean {
+        val failed = edgeSpeakFailed
+        edgeSpeakFailed = false
+        return failed
+    }
+
     fun isValidTTS(): Boolean {
-        return tts != null
+        return usesEdgeVoice() || tts != null
     }
 
     private fun clearTTS(tts: TextToSpeech) {
@@ -84,22 +115,102 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     }
 
     fun setLanguage(locale: Locale?) {
-        val realLocale = locale ?: Locale.US
-        setKey(EPUB_LANG, realLocale.displayName)
+        currentLocale = locale ?: Locale.US
+        setKey(EPUB_LANG, currentLocale.displayName)
+        val edge = edgeVoice
+        if (edge != null) {
+            val match = EdgeTtsVoices.matching(currentLocale)
+            if (match.none { it.id == edge.id }) {
+                match.firstOrNull()?.let { setEdgeVoice(it) }
+            }
+        }
         val tts = tts ?: return
         clearTTS(tts)
-        tts.language = realLocale
+        tts.language = currentLocale
     }
 
     fun setVoice(voice: Voice?) {
+        edgeVoice = null
         if (voice == null) {
             removeKey(EPUB_VOICE)
         } else {
             setKey(EPUB_VOICE, voice.name)
         }
+        interruptTTS()
         val tts = tts ?: return
         clearTTS(tts)
         tts.voice = voice ?: tts.defaultVoice
+    }
+
+    fun setEdgeVoice(voice: EdgeTtsVoice) {
+        edgeVoice = voice
+        currentLocale = voice.locale
+        setKey(EPUB_LANG, currentLocale.displayName)
+        setKey(EPUB_VOICE, EdgeTtsVoices.PREFIX + voice.id)
+        interruptTTS()
+    }
+
+    fun selectedVoice(): ReaderTtsVoice {
+        edgeVoice?.let { return ReaderTtsVoice.Edge(it) }
+        val name = getKey<String>(EPUB_VOICE)
+        if (name.isNullOrBlank() || name.startsWith(EdgeTtsVoices.PREFIX)) {
+            return ReaderTtsVoice.Default
+        }
+        val voice = tts?.voices?.firstOrNull { it.name == name }
+        return if (voice != null) ReaderTtsVoice.System(voice) else ReaderTtsVoice.Default
+    }
+
+    fun languagePickerItems(systemTts: TextToSpeech?): List<Locale?> {
+        val languages = mutableListOf<Locale?>(null)
+        val seen = mutableSetOf<String>()
+        fun addLocale(locale: Locale) {
+            val key = EdgeTtsVoices.localeKey(locale)
+            if (seen.add(key)) {
+                languages.add(locale)
+            }
+        }
+        systemTts?.availableLanguages?.filterNotNull()?.sortedBy { it.displayName }?.forEach(::addLocale)
+        EdgeTtsVoices.locales.sortedBy { it.displayName }.forEach(::addLocale)
+        return languages
+    }
+
+    fun voicePickerItems(
+        systemTts: TextToSpeech?,
+        context: Context
+    ): List<Pair<String, ReaderTtsVoice>> {
+        val items = mutableListOf<Pair<String, ReaderTtsVoice>>()
+        items.add(context.getString(R.string.default_text) to ReaderTtsVoice.Default)
+
+        for (voice in EdgeTtsVoices.matching(currentLocale)) {
+            items.add(
+                context.getString(R.string.tts_voice_edge_format, voice.name) to ReaderTtsVoice.Edge(voice)
+            )
+        }
+
+        val matchAgainst = currentLocale
+        val systemVoices = systemTts?.voices
+            ?.filter { it != null && localesMatch(it.locale, matchAgainst) }
+            ?.sortedBy { it.name }
+            .orEmpty()
+        for (voice in systemVoices) {
+            val label = buildString {
+                append(voice.name)
+                if (voice.isNetworkConnectionRequired) {
+                    append(" (☁)")
+                }
+            }
+            items.add(label to ReaderTtsVoice.System(voice))
+        }
+        return items
+    }
+
+    fun selectedLanguageIndex(languages: List<Locale?>): Int {
+        val stored = getKey<String>(EPUB_LANG)
+        if (stored.isNullOrBlank()) return 0
+        val index = languages.indexOfFirst { locale ->
+            locale != null && localesMatch(locale, currentLocale)
+        }
+        return if (index >= 0) index else 0
     }
 
     fun interruptTTS() {
@@ -107,10 +218,14 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         tts?.let { tts ->
             clearTTS(tts)
         }
+        edgeSpeakGeneration++
+        edgeSpeakJob?.cancel()
+        edgePlayer.stop()
+        TTSEndSpeakId = maxOf(TTSEndSpeakId, TTSQueueId)
     }
 
     fun ttsInitialized(): Boolean {
-        return tts != null
+        return usesEdgeVoice() || tts != null
     }
 
     suspend fun speak(
@@ -118,6 +233,9 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         next: TTSHelper.TTSLine?,
         action: () -> Boolean
     ): Int? {
+        if (usesEdgeVoice()) {
+            return speakEdge(line, next, action)
+        }
         val tts = requireTTS(action) ?: return null
 
         val queue = TTSQueue
@@ -137,6 +255,59 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         return ret
     }
 
+    private fun speakEdge(
+        line: TTSHelper.TTSLine,
+        next: TTSHelper.TTSLine?,
+        action: () -> Boolean
+    ): Int? {
+        val voice = edgeVoice ?: return null
+        TTSQueueId++
+        val id = TTSQueueId
+        val generation = edgeSpeakGeneration
+        edgeSpeakFailed = false
+
+        edgeSpeakJob = edgeScope.launch {
+            try {
+                val audio = EdgeTtsClient.synthesize(line.speakOutMsg, voice)
+                if (generation != edgeSpeakGeneration || action()) {
+                    TTSEndSpeakId = maxOf(TTSEndSpeakId, id)
+                    return@launch
+                }
+                edgePlayer.play(audio, speed, pitch) {
+                    TTSEndSpeakId = maxOf(TTSEndSpeakId, id)
+                }
+                if (next != null) {
+                    EdgeTtsClient.prefetch(next.speakOutMsg, voice)
+                }
+            } catch (_: CancellationException) {
+                TTSEndSpeakId = maxOf(TTSEndSpeakId, id)
+            } catch (t: Exception) {
+                logError(t)
+                edgeSpeakFailed = true
+                CommonActivity.showToast(R.string.tts_edge_error)
+                TTSEndSpeakId = maxOf(TTSEndSpeakId, id)
+            }
+        }
+        return id
+    }
+
+    private fun restoreEdgeVoice(): EdgeTtsVoice? {
+        val stored = getKey<String>(EPUB_VOICE) ?: return null
+        if (!stored.startsWith(EdgeTtsVoices.PREFIX)) return null
+        return EdgeTtsVoices.fromId(stored.removePrefix(EdgeTtsVoices.PREFIX))
+    }
+
+    private fun restoreLocale(): Locale {
+        val langName = getKey<String>(EPUB_LANG) ?: return Locale.US
+        return EdgeTtsVoices.locales.firstOrNull { it.displayName == langName }
+            ?: Locale.getAvailableLocales().firstOrNull { it.displayName == langName }
+            ?: Locale.US
+    }
+
+    private fun localesMatch(a: Locale, b: Locale): Boolean {
+        return EdgeTtsVoices.localeKey(a) == EdgeTtsVoices.localeKey(b)
+    }
+
     /** waits for sentence to be finished or action to be true, if action is true then
      * break early and interrupt TTS */
     suspend fun waitForOr(id: Int?, action: () -> Boolean, then: () -> Unit) {
@@ -153,7 +324,10 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
 
     private val mutex: Mutex = Mutex() // no duplicate tts
 
-    suspend fun requireTTS(action: () -> Boolean = { false }): TextToSpeech? = with(mutex) {
+    suspend fun requireTTS(
+        action: () -> Boolean = { false },
+        requireSupportedLanguage: Boolean = true
+    ): TextToSpeech? = with(mutex) {
         coroutineScope {
             val currentTTS = tts
             if (currentTTS != null) {
@@ -204,7 +378,9 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
                 pendingTTS.voices.firstOrNull { it.name == voiceName }
                     ?: pendingTTS.defaultVoice
 
-            if (canSetLanguage == TextToSpeech.LANG_MISSING_DATA || canSetLanguage == TextToSpeech.LANG_NOT_SUPPORTED) {
+            if (requireSupportedLanguage &&
+                (canSetLanguage == TextToSpeech.LANG_MISSING_DATA || canSetLanguage == TextToSpeech.LANG_NOT_SUPPORTED)
+            ) {
                 CommonActivity.showToast(R.string.tts_language_error)
                 pendingTTS.shutdown()
                 return@coroutineScope null
@@ -263,6 +439,10 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         }
         tts = null
         TTSQueue = null
+        edgeSpeakGeneration++
+        edgeSpeakJob?.cancel()
+        edgePlayer.release()
+        edgeJob.cancel()
 
         unregister()
     }

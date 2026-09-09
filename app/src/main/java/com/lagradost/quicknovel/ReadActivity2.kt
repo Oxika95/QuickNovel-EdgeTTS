@@ -13,7 +13,6 @@ import android.graphics.Color
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
-import android.speech.tts.Voice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -1417,18 +1416,17 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
 
             binding.readLanguage.setOnClickListener { _ ->
                 ioSafe {
-                    val tts = viewModel.ttsSession?.requireTTS() ?: return@ioSafe
+                    val session = viewModel.ttsSession ?: return@ioSafe
+                    val tts = session.requireTTS(requireSupportedLanguage = false)
 
                     runOnUiThread {
-                        val languages = mutableListOf<Locale?>(null).apply {
-                            addAll(tts.availableLanguages?.filterNotNull() ?: emptySet())
-                        }
+                        val languages = session.languagePickerItems(tts)
                         val ctx = binding.readLanguage.context ?: return@runOnUiThread
                         ctx.showDialog(
                             languages.map {
                                 it?.displayName ?: ctx.getString(R.string.default_text)
                             },
-                            languages.indexOf(tts.voice?.locale),
+                            session.selectedLanguageIndex(languages),
                             ctx.getString(R.string.tts_locale), false, {}
                         ) { index ->
                             viewModel.setTTSLanguage(languages.getOrNull(index))
@@ -1485,36 +1483,24 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
 
             binding.readVoice.setOnClickListener {
                 ioSafe {
-                    val tts = viewModel.ttsSession?.requireTTS() ?: return@ioSafe
+                    val session = viewModel.ttsSession ?: return@ioSafe
+                    val tts = session.requireTTS(requireSupportedLanguage = false)
 
                     runOnUiThread {
-                        val matchAgainst = tts.voice.locale
                         val ctx = binding.readLanguage.context ?: return@runOnUiThread
-                        val voices =
-                            mutableListOf<Pair<String, Voice?>>(ctx.getString(R.string.default_text) to null).apply {
-                                val voices =
-                                    tts.voices.filter { it != null && it.locale == matchAgainst }
-                                        .map {
-                                            // ${"★".repeat(it.quality / 100) }
-                                            ("${it.name} ${
-                                                if (it.isNetworkConnectionRequired) {
-                                                    "(☁)"
-                                                } else {
-                                                    ""
-                                                }
-                                            }") to it
-                                        }
-
-                                addAll(voices.sortedBy { (name, _) -> name })
-                            }
+                        val voices = session.voicePickerItems(tts, ctx)
+                        val selected = session.selectedVoice()
+                        val selectedIndex = voices.indexOfFirst { it.second == selected }.let {
+                            if (it >= 0) it else 0
+                        }
 
                         ctx.showDialog(
                             voices.map { it.first },
-                            voices.map { it.second }.indexOf(tts.voice),
-                            ctx.getString(R.string.tts_locale), false, {}
+                            selectedIndex,
+                            ctx.getString(R.string.tts_voice_title), false, {}
                         ) { index ->
-                            val voice = voices.getOrNull(index)?.second
-                            viewModel.setTTSVoice(voice)
+                            val voice = voices.getOrNull(index)?.second ?: return@showDialog
+                            viewModel.setReaderTTSVoice(voice)
                         }
                     }
                 }

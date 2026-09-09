@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.media.MediaPlayer
 import android.speech.tts.Voice
+import com.lagradost.quicknovel.tts.ReaderTtsVoice
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.util.Log
@@ -1374,6 +1375,14 @@ class ReadActivityViewModel : ViewModel() {
         ttsSession?.setVoice(voice)
     }
 
+    fun setReaderTTSVoice(voice: ReaderTtsVoice) {
+        when (voice) {
+            ReaderTtsVoice.Default -> ttsSession?.setVoice(null)
+            is ReaderTtsVoice.System -> ttsSession?.setVoice(voice.voice)
+            is ReaderTtsVoice.Edge -> ttsSession?.setEdgeVoice(voice.voice)
+        }
+    }
+
     fun pauseTTS() {
         val ttsSession = ttsSession ?: return
         if (!ttsSession.ttsInitialized()) return
@@ -1574,6 +1583,12 @@ class ReadActivityViewModel : ViewModel() {
                             currentTTSStatus != TTSHelper.TTSStatus.IsRunning || pendingTTSSkip != 0
                         }) {
                             notify()
+                        }
+
+                        if (ttsSession.consumeEdgeSpeakFailure()) {
+                            currentTTSStatus = TTSHelper.TTSStatus.IsStopped
+                            notify()
+                            break
                         }
 
                         // wait for pause

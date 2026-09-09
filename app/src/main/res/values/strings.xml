@@ -190,6 +190,8 @@
     <string name="tts_locale">Language</string>
     <string name="tts_voice">Voice</string>
     <string name="tts_voice_title">TTS Voice</string>
+    <string name="tts_voice_edge_format">%1$s (Edge TTS)</string>
+    <string name="tts_edge_error">Unable to reach Edge TTS. Check your connection.</string>
     <string name="theme_key">theme_key</string>
     <string name="theme">Theme</string>
     <string name="primary_color_key">primary_color_key</string>

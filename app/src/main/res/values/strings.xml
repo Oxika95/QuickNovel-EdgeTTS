@@ -187,6 +187,8 @@
     <string name="logcat_success">Successfully stored logcat at %s</string>
     <string name="backup_failed">Storage permissions missing, please try again</string>
     <string name="backup_failed_error_format">Error backing up: %s</string>
+    <string name="tts_engine">Engine</string>
+    <string name="tts_engine_edge">EdgeTTS</string>
     <string name="tts_locale">Language</string>
     <string name="tts_voice">Voice</string>
     <string name="tts_voice_title">TTS Voice</string>

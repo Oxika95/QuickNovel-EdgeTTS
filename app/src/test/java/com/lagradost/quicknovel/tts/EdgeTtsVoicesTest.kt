@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Locale
 
+
 class EdgeTtsVoicesTest {
     @Test
     fun matchingUsesExactLocaleWhenAvailable() {
@@ -25,6 +26,22 @@ class EdgeTtsVoicesTest {
         assertEquals(
             EdgeTtsVoices.localeKey(Locale.US),
             EdgeTtsVoices.localeKey(Locale.forLanguageTag("en-US"))
+        )
+    }
+
+    @Test
+    fun storedEngineMigratesLegacyEdgeVoice() {
+        assertEquals(
+            TtsEngines.EDGE_ID,
+            TtsEngines.resolveStored(null, "edge:en-US-AriaNeural")
+        )
+        assertEquals(
+            TtsEngines.DEFAULT_ID,
+            TtsEngines.resolveStored(null, null)
+        )
+        assertEquals(
+            "com.google.android.tts",
+            TtsEngines.resolveStored("com.google.android.tts", "edge:en-US-AriaNeural")
         )
     }
 }

@@ -79,6 +79,8 @@ import kotlin.math.roundToInt
 import kotlin.properties.Delegates
 import com.google.android.material.tabs.TabLayout
 import com.lagradost.quicknovel.ReadActivityViewModel.MLSettings.Companion.AUTO_LANG
+import com.lagradost.quicknovel.tts.ReaderTtsEngine
+import com.lagradost.quicknovel.tts.TtsEngines
 import com.lagradost.quicknovel.util.SubtitleHelper
 import com.lagradost.quicknovel.util.UIHelper.fixSystemBarsPadding
 import kotlin.collections.map
@@ -1414,10 +1416,40 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
                     "${binding.readMlTitle.context.getString(R.string.google_translate)} (${mlSettings.fromDisplay} -> ${mlSettings.toDisplay})"
             }
 
+            binding.readEngine.setOnClickListener { view ->
+                val ctx = view.context
+                val session = viewModel.ttsSession ?: return@setOnClickListener
+                val engines = TtsEngines.pickerItems(ctx)
+                val selectedId = TtsEngines.id(session.selectedEngine())
+                val selectedIndex = engines.indexOfFirst { TtsEngines.id(it.second) == selectedId }.let {
+                    if (it >= 0) it else 0
+                }
+                ctx.showDialog(
+                    engines.map { it.first },
+                    selectedIndex,
+                    ctx.getString(R.string.tts_engine), false, {}
+                ) { index ->
+                    engines.getOrNull(index)?.second?.let { viewModel.setTTSEngine(it) }
+                }
+            }
+
+            binding.readEngine.setOnLongClickListener {
+                it.popupMenu(items = listOf(1 to R.string.reset_value), selectedItemId = null) {
+                    if (itemId == 1) {
+                        viewModel.setTTSEngine(ReaderTtsEngine.Default)
+                    }
+                }
+                return@setOnLongClickListener true
+            }
+
             binding.readLanguage.setOnClickListener { _ ->
                 ioSafe {
                     val session = viewModel.ttsSession ?: return@ioSafe
-                    val tts = session.requireTTS(requireSupportedLanguage = false)
+                    val tts = if (session.usesEdgeVoice()) {
+                        null
+                    } else {
+                        session.requireTTS(requireSupportedLanguage = false)
+                    }
 
                     runOnUiThread {
                         val languages = session.languagePickerItems(tts)
@@ -1484,7 +1516,11 @@ class ReadActivity2 : AppCompatActivity(), ColorPickerDialogListener {
             binding.readVoice.setOnClickListener {
                 ioSafe {
                     val session = viewModel.ttsSession ?: return@ioSafe
-                    val tts = session.requireTTS(requireSupportedLanguage = false)
+                    val tts = if (session.usesEdgeVoice()) {
+                        null
+                    } else {
+                        session.requireTTS(requireSupportedLanguage = false)
+                    }
 
                     runOnUiThread {
                         val ctx = binding.readLanguage.context ?: return@runOnUiThread

@@ -24,7 +24,9 @@ import com.lagradost.quicknovel.tts.EdgeTtsClient
 import com.lagradost.quicknovel.tts.EdgeTtsPlayer
 import com.lagradost.quicknovel.tts.EdgeTtsVoice
 import com.lagradost.quicknovel.tts.EdgeTtsVoices
+import com.lagradost.quicknovel.tts.ReaderTtsEngine
 import com.lagradost.quicknovel.tts.ReaderTtsVoice
+import com.lagradost.quicknovel.tts.TtsEngines
 import com.lagradost.quicknovel.ui.UiText
 import com.lagradost.quicknovel.ui.txt
 import com.lagradost.quicknovel.util.UIHelper.requestAudioFocus
@@ -84,10 +86,11 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     private var edgeSpeakGeneration = 0
     private var edgeSpeakFailed = false
     private var edgeVoice: EdgeTtsVoice? = restoreEdgeVoice()
+    private var engine: ReaderTtsEngine = restoreEngine()
     var currentLocale: Locale = restoreLocale()
         private set
 
-    fun usesEdgeVoice(): Boolean = edgeVoice != null
+    fun usesEdgeVoice(): Boolean = engine is ReaderTtsEngine.Edge
 
     fun consumeEdgeSpeakFailure(): Boolean {
         val failed = edgeSpeakFailed
@@ -117,12 +120,13 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     fun setLanguage(locale: Locale?) {
         currentLocale = locale ?: Locale.US
         setKey(EPUB_LANG, currentLocale.displayName)
-        val edge = edgeVoice
-        if (edge != null) {
+        if (usesEdgeVoice()) {
             val match = EdgeTtsVoices.matching(currentLocale)
-            if (match.none { it.id == edge.id }) {
+            val current = edgeVoice
+            if (current == null || match.none { it.id == current.id }) {
                 match.firstOrNull()?.let { setEdgeVoice(it) }
             }
+            return
         }
         val tts = tts ?: return
         clearTTS(tts)
@@ -130,6 +134,10 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     }
 
     fun setVoice(voice: Voice?) {
+        if (usesEdgeVoice()) {
+            EdgeTtsVoices.matching(currentLocale).firstOrNull()?.let { setEdgeVoice(it) }
+            return
+        }
         edgeVoice = null
         if (voice == null) {
             removeKey(EPUB_VOICE)
@@ -143,15 +151,46 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     }
 
     fun setEdgeVoice(voice: EdgeTtsVoice) {
+        engine = ReaderTtsEngine.Edge
         edgeVoice = voice
         currentLocale = voice.locale
+        setKey(EPUB_TTS_ENGINE, TtsEngines.EDGE_ID)
         setKey(EPUB_LANG, currentLocale.displayName)
         setKey(EPUB_VOICE, EdgeTtsVoices.PREFIX + voice.id)
         interruptTTS()
     }
 
+    fun setEngine(next: ReaderTtsEngine) {
+        if (TtsEngines.id(engine) == TtsEngines.id(next)) return
+        interruptTTS()
+        shutdownTtsInstance()
+        engine = next
+        setKey(EPUB_TTS_ENGINE, TtsEngines.id(next))
+        when (next) {
+            ReaderTtsEngine.Edge -> {
+                val existing = edgeVoice ?: restoreEdgeVoice()
+                val match = existing?.takeIf {
+                    EdgeTtsVoices.localeKey(it.locale) == EdgeTtsVoices.localeKey(currentLocale)
+                } ?: EdgeTtsVoices.matching(currentLocale).firstOrNull()
+                val fallback = match ?: EdgeTtsVoices.all.firstOrNull()
+                if (fallback != null) {
+                    setEdgeVoice(fallback)
+                }
+            }
+            ReaderTtsEngine.Default, is ReaderTtsEngine.Installed -> {
+                edgeVoice = null
+                val storedVoice = getKey<String>(EPUB_VOICE)
+                if (storedVoice.isNullOrBlank() || storedVoice.startsWith(EdgeTtsVoices.PREFIX)) {
+                    removeKey(EPUB_VOICE)
+                }
+            }
+        }
+    }
+
     fun selectedVoice(): ReaderTtsVoice {
-        edgeVoice?.let { return ReaderTtsVoice.Edge(it) }
+        if (usesEdgeVoice()) {
+            return edgeVoice?.let { ReaderTtsVoice.Edge(it) } ?: ReaderTtsVoice.Default
+        }
         val name = getKey<String>(EPUB_VOICE)
         if (name.isNullOrBlank() || name.startsWith(EdgeTtsVoices.PREFIX)) {
             return ReaderTtsVoice.Default
@@ -159,6 +198,8 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         val voice = tts?.voices?.firstOrNull { it.name == name }
         return if (voice != null) ReaderTtsVoice.System(voice) else ReaderTtsVoice.Default
     }
+
+    fun selectedEngine(): ReaderTtsEngine = engine
 
     fun languagePickerItems(systemTts: TextToSpeech?): List<Locale?> {
         val languages = mutableListOf<Locale?>(null)
@@ -169,8 +210,11 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
                 languages.add(locale)
             }
         }
-        systemTts?.availableLanguages?.filterNotNull()?.sortedBy { it.displayName }?.forEach(::addLocale)
-        EdgeTtsVoices.locales.sortedBy { it.displayName }.forEach(::addLocale)
+        if (usesEdgeVoice()) {
+            EdgeTtsVoices.locales.sortedBy { it.displayName }.forEach(::addLocale)
+        } else {
+            systemTts?.availableLanguages?.filterNotNull()?.sortedBy { it.displayName }?.forEach(::addLocale)
+        }
         return languages
     }
 
@@ -181,10 +225,11 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         val items = mutableListOf<Pair<String, ReaderTtsVoice>>()
         items.add(context.getString(R.string.default_text) to ReaderTtsVoice.Default)
 
-        for (voice in EdgeTtsVoices.matching(currentLocale)) {
-            items.add(
-                context.getString(R.string.tts_voice_edge_format, voice.name) to ReaderTtsVoice.Edge(voice)
-            )
+        if (usesEdgeVoice()) {
+            for (voice in EdgeTtsVoices.matching(currentLocale)) {
+                items.add(voice.name to ReaderTtsVoice.Edge(voice))
+            }
+            return items
         }
 
         val matchAgainst = currentLocale
@@ -297,6 +342,29 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
         return EdgeTtsVoices.fromId(stored.removePrefix(EdgeTtsVoices.PREFIX))
     }
 
+    private fun restoreEngine(): ReaderTtsEngine {
+        val storedId = TtsEngines.resolveStored(
+            getKey<String>(EPUB_TTS_ENGINE),
+            getKey<String>(EPUB_VOICE)
+        )
+        return when (storedId) {
+            TtsEngines.DEFAULT_ID -> ReaderTtsEngine.Default
+            TtsEngines.EDGE_ID -> ReaderTtsEngine.Edge
+            else -> TtsEngines.installed(context).firstOrNull { it.packageName == storedId }
+                ?: ReaderTtsEngine.Default
+        }
+    }
+
+    private fun shutdownTtsInstance() {
+        tts?.apply {
+            stop()
+            setOnUtteranceProgressListener(null)
+            shutdown()
+        }
+        tts = null
+        TTSQueue = null
+    }
+
     private fun restoreLocale(): Locale {
         val langName = getKey<String>(EPUB_LANG) ?: return Locale.US
         return EdgeTtsVoices.locales.firstOrNull { it.displayName == langName }
@@ -336,12 +404,13 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
 
             var waiting = true
             var success = false
+            val enginePackage = (engine as? ReaderTtsEngine.Installed)?.packageName
             // Fucking retarded leak, we have to use applicationContext
-            val pendingTTS = TextToSpeech(context.applicationContext) { status ->
+            val listener = TextToSpeech.OnInitListener { status ->
                 success = status == TextToSpeech.SUCCESS
                 waiting = false
                 if (status == TextToSpeech.SUCCESS) {
-                    return@TextToSpeech
+                    return@OnInitListener
                 }
                 val errorMSG = when (status) {
                     TextToSpeech.ERROR -> "ERROR"
@@ -356,7 +425,11 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
                 }
 
                 CommonActivity.showToast("Initialization Failed! Error $errorMSG")
-                return@TextToSpeech
+            }
+            val pendingTTS = if (enginePackage.isNullOrBlank()) {
+                TextToSpeech(context.applicationContext, listener)
+            } else {
+                TextToSpeech(context.applicationContext, listener, enginePackage)
             }
 
             while (waiting && isActive) {
@@ -369,6 +442,7 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
             if (!success) return@coroutineScope null
 
             val voiceName = BaseApplication.getKey<String>(EPUB_VOICE)
+                ?.takeUnless { it.startsWith(EdgeTtsVoices.PREFIX) }
             val langName = BaseApplication.getKey<String>(EPUB_LANG)
 
             val canSetLanguage = pendingTTS.setLanguage(
@@ -432,13 +506,7 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
     }
 
     fun release() {
-        tts?.apply {
-            stop()
-            setOnUtteranceProgressListener(null) // Fucking retarded leak
-            shutdown()
-        }
-        tts = null
-        TTSQueue = null
+        shutdownTtsInstance()
         edgeSpeakGeneration++
         edgeSpeakJob?.cancel()
         edgePlayer.release()
@@ -456,6 +524,11 @@ class TTSSession(val context: Context, event: (TTSHelper.TTSActionType) -> Boole
 
     init {
         // mediaSession = TTSHelper.initMediaSession(context, event)
+
+        if (engine is ReaderTtsEngine.Edge && edgeVoice == null) {
+            edgeVoice = EdgeTtsVoices.matching(currentLocale).firstOrNull()
+                ?: EdgeTtsVoices.all.firstOrNull()
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).run {

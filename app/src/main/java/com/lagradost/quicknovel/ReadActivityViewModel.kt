@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.media.MediaPlayer
 import android.speech.tts.Voice
+import com.lagradost.quicknovel.tts.ReaderTtsEngine
 import com.lagradost.quicknovel.tts.ReaderTtsVoice
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -1365,6 +1366,10 @@ class ReadActivityViewModel : ViewModel() {
 
     fun stopTTS() {
         currentTTSStatus = TTSHelper.TTSStatus.IsStopped
+    }
+
+    fun setTTSEngine(engine: ReaderTtsEngine) {
+        ttsSession?.setEngine(engine)
     }
 
     fun setTTSLanguage(locale: Locale?) {

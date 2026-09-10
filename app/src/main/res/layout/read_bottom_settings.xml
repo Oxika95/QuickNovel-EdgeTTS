@@ -207,12 +207,27 @@
                     android:orientation="horizontal">
 
                     <com.google.android.material.button.MaterialButton
+                        android:id="@+id/read_engine"
+                        style="@style/BlackButton"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:text="@string/tts_engine"
+                        app:icon="@drawable/ic_baseline_tune_24" />
+
+                    <com.google.android.material.button.MaterialButton
                         android:id="@+id/read_language"
                         style="@style/BlackButton"
                         android:layout_width="0dp"
                         android:layout_weight="1"
                         android:text="@string/tts_locale"
                         app:icon="@drawable/ic_baseline_language_24" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:orientation="horizontal">
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/read_voice"

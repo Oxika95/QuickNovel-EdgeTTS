@@ -6,7 +6,6 @@ This is an **independent fork** of [QuickNovel](https://github.com/LagradOst/Qui
 
 - **Microsoft Edge TTS** in the EPUB reader, using Microsoft’s Edge Speech neural voices over the network
 - Edge voices appear in the existing language/voice pickers, labeled like `Aria (Edge TTS)`, alongside Android system TTS
-- Playback stops on the first Edge connection failure instead of skipping through the chapter
 
 ## Acknowledgements
 
